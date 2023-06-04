@@ -28,7 +28,7 @@ if [ ! -z $CUDA_ROOT ]; then
   nvcc_compiler="$CUDA_ROOT/bin/nvcc"
 fi
 
-#host_compiler="icpc"
+# host_compiler="/home/tu/tu_tu/tu_zxoyu44/miniconda3/envs/lammps/bin/c++"
 #host_compiler="/usr/local/gcc/4.8.3/bin/g++"
 #host_compiler="/usr/local/gcc/4.9.1/bin/g++"
 

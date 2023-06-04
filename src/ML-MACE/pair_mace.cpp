@@ -30,10 +30,6 @@
 #include <iostream>
 #include <stdexcept>
 
-#ifdef MACE_DEBUG
-#include <chrono>
-#endif
-
 using namespace LAMMPS_NS;
 
 /* ---------------------------------------------------------------------- */
@@ -54,16 +50,6 @@ PairMACE::~PairMACE()
 void PairMACE::compute(int eflag, int vflag)
 {
   ev_init(eflag, vflag);
-
-std::cout << " " << std::endl;
-
-  #ifdef MACE_DEBUG
-  std::chrono::time_point<std::chrono::high_resolution_clock> t0, t1;
-  #endif
-
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
 
   if (atom->nlocal != list->inum) error->all(FLERR, "ERROR: nlocal != inum.");
   if (domain_decomposition) {
@@ -102,15 +88,6 @@ std::cout << " " << std::endl;
   cell[2][1] = domain->h[3];
   cell[2][2] = domain->h[2];
 
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "positions+cell: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
-
   // ----- edge_index and unit_shifts -----
   // count total number of edges
   int n_edges = 0;
@@ -142,13 +119,6 @@ std::cout << " " << std::endl;
   for (int ii=0; ii<n_nodes-1; ++ii) {
     first_edge[ii+1] = first_edge[ii] + n_edges_vec[ii];
   }
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "edge count: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
   // fill edge_index and unit_shifts tensors
   auto edge_index = torch::empty({2,n_edges}, torch::dtype(torch::kInt64));
   auto unit_shifts = torch::zeros({n_edges,3}, torch_float_dtype);
@@ -193,14 +163,6 @@ std::cout << " " << std::endl;
       }
     }
   }
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "edge fill: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
 
   // ----- node_attrs -----
   // node_attrs is one-hot encoding for atomic numbers
@@ -221,15 +183,6 @@ std::cout << " " << std::endl;
     node_attrs[i][mace_type(atom->type[i])-1] = 1.0;
   }
 
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "node attrs: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
-
   // ----- mask for ghost -----
   auto mask = torch::zeros(n_nodes, torch::dtype(torch::kBool));
   #pragma omp parallel for
@@ -247,15 +200,7 @@ std::cout << " " << std::endl;
   ptr[1] = n_nodes;
   weight[0] = 1.0;
 
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "other setup: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
   // transfer data to device
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
   batch = batch.to(device);
   cell = cell.to(device);
   edge_index = edge_index.to(device);
@@ -267,15 +212,8 @@ std::cout << " " << std::endl;
   shifts = shifts.to(device);
   unit_shifts = unit_shifts.to(device);
   weight = weight.to(device);
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "transfer: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
 
-  // pack the input, call the model, extract the output
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
+  // pack the input, call the model
   c10::Dict<std::string, torch::Tensor> input;
   input.insert("batch", batch);
   input.insert("cell", cell);
@@ -288,48 +226,18 @@ std::cout << " " << std::endl;
   input.insert("shifts", shifts);
   input.insert("unit_shifts", unit_shifts);
   input.insert("weight", weight);
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "pack: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
-  auto output = model.forward({input, mask.to(device), true, true, false}).toGenericDict();
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "model: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
-  auto node_energy = output.at("node_energy").toTensor().cpu();
-  forces = output.at("forces").toTensor().cpu();
-  auto vir = output.at("virials").toTensor().cpu();
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "transfer back: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
-  #ifdef MACE_DEBUG
-  t0 = std::chrono::high_resolution_clock::now();
-  #endif
+  auto output = model.forward({input, mask.to(device), bool(vflag_global)}).toGenericDict();
 
   // mace energy
   //   -> sum of site energies of local atoms
   if (eflag_global) {
-    eng_vdwl = 0.0;
-    #pragma omp parallel for reduction(+:eng_vdwl)
-    for (int ii=0; ii<list->inum; ++ii) {
-      int i = list->ilist[ii];
-      eng_vdwl += node_energy[i].item<double>();
-    }
+    energy = output.at("total_energy_local").toTensor().cpu();
+    eng_vdwl += energy.item<double>();
   }
 
   // mace forces
   //   -> derivatives of total mace energy
+  forces = output.at("forces").toTensor().cpu();
   #pragma omp parallel for
   for (int ii=0; ii<list->inum; ++ii) {
     int i = list->ilist[ii];
@@ -341,6 +249,7 @@ std::cout << " " << std::endl;
   // mace site energies
   //   -> local atoms only
   if (eflag_atom) {
+    auto node_energy = output.at("node_energy").toTensor().cpu();
     #pragma omp parallel for
     for (int ii=0; ii<list->inum; ++ii) {
       int i = list->ilist[ii];
@@ -351,6 +260,7 @@ std::cout << " " << std::endl;
   // mace virials (local atoms only)
   //   -> derivatives of sum of site energies of local atoms
   if (vflag_global) {
+    auto vir = output.at("virials").toTensor().cpu();
     virial[0] = vir[0][0][0].item<double>();
     virial[1] = vir[0][1][1].item<double>();
     virial[2] = vir[0][2][2].item<double>();
@@ -364,30 +274,18 @@ std::cout << " " << std::endl;
   if (vflag_atom) {
     error->all(FLERR, "ERROR: pair_mace does not support vflag_atom.");
   }
-
-  #ifdef MACE_DEBUG
-  t1 = std::chrono::high_resolution_clock::now();
-  std::cout << "unpack: " << std::chrono::duration_cast<std::chrono::milliseconds>(t1-t0).count() << std::endl;
-  #endif
-
 }
 
 /* ---------------------------------------------------------------------- */
 
 void PairMACE::settings(int narg, char **arg)
 {
-  if (narg > 2) {
+  if (narg > 1) {
     error->all(FLERR, "Too many pair_style arguments for pair_style mace.");
   }
 
-  if (narg >= 1) {
-    if (strcmp(arg[0], "gpu") == 0) {
-      device_type = "gpu";
-    }
-  }
-
-  if (narg >= 2) {
-    if (strcmp(arg[1], "no_domain_decomposition") == 0) {
+  if (narg == 1) {
+    if (strcmp(arg[0], "no_domain_decomposition") == 0) {
       domain_decomposition = false;
       // TODO: add check against MPI rank
     }
@@ -402,12 +300,11 @@ void PairMACE::coeff(int narg, char **arg)
 
   if (!allocated) allocate();
 
-  if (device_type == "cpu") {
+  if (!torch::cuda::is_available()) {
     device = c10::Device(torch::kCPU);
   } else {
     int rank;
     MPI_Comm_rank(world, &rank);
-    std::cout << "MPI rank: " << rank << std::endl;
     device = c10::Device(torch::kCUDA,rank);
   }
 
